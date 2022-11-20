@@ -4,13 +4,17 @@
 //
 // You can inspect what code gets generated using
 // `cargo expand --test health_check` (<- name of the test file)
-use std::net::TcpListener;
+use dcadex::configuration::get_configuration;
+use dcadex::startup::run;
 
+use sqlx::{Connection, PgConnection};
+use std::net::TcpListener;
 #[actix_web::test]
 async fn health_check_works() {
     let address = spawn_app();
     // Arrange
     spawn_app();
+
     // We need to bring in `reqwest`
     // to perform HTTP requests against our application.
     let client = reqwest::Client::new();
@@ -29,7 +33,7 @@ fn spawn_app() -> String {
     // We retrieve the port assigned to us by the OS
     let port = listener.local_addr().unwrap().port();
     // We return the application address to the caller!
-    let server = dcadex::run(listener).expect("Failed to bind address");
+    let server = run(listener).expect("Failed to bind address");
     let _ = actix_web::rt::spawn(server);
     format!("http://127.0.0.1:{}", port)
 }
@@ -38,6 +42,13 @@ fn spawn_app() -> String {
 async fn subscribe_returns_a_200_for_valid_form_data() {
     // Arrange
     let app_address = spawn_app();
+    let configuration = get_configuration().expect("Failed to read configuration");
+    let connection_string = configuration.database.connection_string();
+    // The `Connection` trait MUST be in scope for us to invoke
+    // `PgConnection::connect` - it is not an inherent method of the struct!
+    let mut connection = PgConnection::connect(&connection_string)
+        .await
+        .expect("Failed to connect to Postgres.");
     let client = reqwest::Client::new();
     // Act
     let body = "name=le%20guin&email=ursula_le_guin%40gmail.com";
@@ -49,6 +60,14 @@ async fn subscribe_returns_a_200_for_valid_form_data() {
         .await
         .expect("Failed to execute request.");
     assert_eq!(200, response.status().as_u16());
+
+    assert_eq!(200, response.status().as_u16());
+    let saved = sqlx::query!("SELECT email, name FROM subscriptions")
+        .fetch_one(&mut connection)
+        .await
+        .expect("Failed to fetch saved subscription.");
+    assert_eq!(saved.email, "ursula_le_guin@gmail.com");
+    assert_eq!(saved.name, "le guin");
 }
 
 #[actix_web::test]
