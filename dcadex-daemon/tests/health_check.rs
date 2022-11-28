@@ -6,6 +6,7 @@
 // `cargo expand --test health_check` (<- name of the test file)
 use dcadex::configuration::get_configuration;
 use dcadex::configuration::DatabaseSettings;
+use dcadex::domain::email_client::EmailClient;
 use dcadex::startup::run;
 use dcadex::telemetry::{get_subscriber, init_subscriber};
 use once_cell::sync::Lazy;
@@ -13,6 +14,7 @@ use secrecy::ExposeSecret;
 use sqlx::{Connection, Executor, PgConnection, PgPool};
 use std::net::TcpListener;
 use uuid::Uuid;
+
 // #[actix_web::test]
 // async fn health_check_works() {
 //     let address = spawn_app();
@@ -58,9 +60,23 @@ async fn spawn_app() -> TestApp {
     // We return the application address to the caller!
     let mut configuration = get_configuration().expect("Failed to read configuration.");
     configuration.database.database_name = Uuid::new_v4().to_string();
+    let timeout = configuration.email_client.timeout();
     let connection_pool = configure_database(&configuration.database).await;
+    configuration.database.database_name = Uuid::new_v4().to_string();
+    // Build a new email client
+    let sender_email = configuration
+        .email_client
+        .sender()
+        .expect("Invalid sender email address.");
+    let email_client = EmailClient::new(
+        configuration.email_client.base_url,
+        sender_email,
+        configuration.email_client.authorization_token,
+        timeout,
+    );
 
-    let server = run(listener, connection_pool.clone()).expect("Failed to bind address");
+    let server =
+        run(listener, connection_pool.clone(), email_client).expect("Failed to bind address");
     let _ = actix_web::rt::spawn(server);
     let address = format!("http://127.0.0.1:{}", port);
     TestApp {
